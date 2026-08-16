@@ -7,6 +7,7 @@ import {
   type SleeperDraft,
   type SleeperDraftPick,
   type SleeperLeague,
+  type SleeperLeagueUser,
   type SleeperMatchup,
   type SleeperPlayer,
   type SleeperRoster,
@@ -16,30 +17,24 @@ import {
 import { draftScore, lineupDecision, playerPosition, waiverScore } from "@/lib/decision";
 import { projectedPoints, scoringKey } from "@/lib/fantasy";
 
-type Tab = "dashboard" | "draft" | "lineup" | "waivers" | "players" | "league" | "guide";
+type Tab = "home" | "draft" | "lineup" | "waivers" | "trades" | "players" | "league" | "help";
 type PlayerMap = Record<string, SleeperPlayer>;
 type ProjectionRow = { playerId: string; stats: Record<string, number>; source: string };
 type ProjectionMap = Record<string, ProjectionRow>;
 type IntelligencePayload = { weekly: ProjectionMap; season: ProjectionMap; weekNumber: number; source: string };
-type PracticePick = { playerId: string; mine: boolean };
-
-type Recommendation = {
-  player: SleeperPlayer;
-  rating: NonNullable<ReturnType<typeof draftScore>>;
-  seasonProjection: number | undefined;
-};
+type Recommendation = { player: SleeperPlayer; rating: NonNullable<ReturnType<typeof draftScore>>; seasonProjection: number | undefined };
 
 const fantasyPositions = ["QB", "RB", "WR", "TE"];
 
 export default function Home() {
   const [username, setUsername] = useState("");
   const [user, setUser] = useState<SleeperUser | null>(null);
+  const [members, setMembers] = useState<SleeperLeagueUser[]>([]);
   const [leagues, setLeagues] = useState<SleeperLeague[]>([]);
   const [league, setLeague] = useState<SleeperLeague | null>(null);
   const [rosters, setRosters] = useState<SleeperRoster[]>([]);
   const [drafts, setDrafts] = useState<SleeperDraft[]>([]);
   const [picks, setPicks] = useState<SleeperDraftPick[]>([]);
-  const [practicePicks, setPracticePicks] = useState<PracticePick[]>([]);
   const [players, setPlayers] = useState<PlayerMap>({});
   const [trendingAdds, setTrendingAdds] = useState<Array<{ player_id: string; count: number }>>([]);
   const [trendingDrops, setTrendingDrops] = useState<Array<{ player_id: string; count: number }>>([]);
@@ -47,12 +42,14 @@ export default function Home() {
   const [matchups, setMatchups] = useState<SleeperMatchup[]>([]);
   const [transactions, setTransactions] = useState<SleeperTransaction[]>([]);
   const [intelligence, setIntelligence] = useState<IntelligencePayload>({ weekly: {}, season: {}, weekNumber: 1, source: "none" });
-  const [tab, setTab] = useState<Tab>("dashboard");
+  const [tab, setTab] = useState<Tab>("home");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [tradeGive, setTradeGive] = useState("");
+  const [tradeReceive, setTradeReceive] = useState("");
 
   useEffect(() => {
     const saved = window.localStorage.getItem("fantasy-copilot-username");
@@ -61,79 +58,62 @@ export default function Home() {
 
   const myRoster = useMemo(() => rosters.find((r) => r.owner_id === user?.user_id) ?? null, [rosters, user]);
   const rosteredIds = useMemo(() => new Set(rosters.flatMap((r) => r.players ?? [])), [rosters]);
-  const realDraftedIds = useMemo(() => new Set(picks.map((p) => p.player_id)), [picks]);
-  const practiceTakenIds = useMemo(() => new Set(practicePicks.map((p) => p.playerId)), [practicePicks]);
-  const draftBlockedIds = useMemo(() => new Set([...realDraftedIds, ...practiceTakenIds]), [realDraftedIds, practiceTakenIds]);
+  const draftedIds = useMemo(() => new Set(picks.map((p) => p.player_id)), [picks]);
   const scoring = useMemo(() => scoringKey(league?.scoring_settings ?? {}), [league]);
 
   const weeklyProjection = (id: string) => projectedPoints(intelligence.weekly[id]?.stats, scoring);
   const seasonProjection = (id: string) => projectedPoints(intelligence.season[id]?.stats, scoring);
 
-  const seasonProjectionValues = useMemo(() => {
-    return Object.values(intelligence.season)
-      .map((row) => projectedPoints(row.stats, scoring))
-      .filter((x): x is number => typeof x === "number")
-      .sort((a, b) => a - b);
-  }, [intelligence.season, scoring]);
+  const seasonProjectionValues = useMemo(() => Object.values(intelligence.season)
+    .map((row) => projectedPoints(row.stats, scoring))
+    .filter((x): x is number => typeof x === "number")
+    .sort((a, b) => a - b), [intelligence.season, scoring]);
 
-  const weeklyProjectionValues = useMemo(() => {
-    return Object.values(intelligence.weekly)
-      .map((row) => projectedPoints(row.stats, scoring))
-      .filter((x): x is number => typeof x === "number")
-      .sort((a, b) => a - b);
-  }, [intelligence.weekly, scoring]);
+  const weeklyProjectionValues = useMemo(() => Object.values(intelligence.weekly)
+    .map((row) => projectedPoints(row.stats, scoring))
+    .filter((x): x is number => typeof x === "number")
+    .sort((a, b) => a - b), [intelligence.weekly, scoring]);
 
   function percentile(value: number | undefined, values: number[]) {
     if (value == null || !values.length) return undefined;
-    let lo = 0;
-    let hi = values.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >>> 1;
-      if (values[mid] <= value) lo = mid + 1;
-      else hi = mid;
-    }
-    return Math.round((lo / values.length) * 100);
+    let count = 0;
+    for (const v of values) if (v <= value) count++;
+    return Math.round((count / values.length) * 100);
   }
 
-  const myDraftPositions = useMemo(() => {
-    const real = (myRoster?.players ?? []).map((id) => playerPosition(players[id])).filter(Boolean) as string[];
-    const practiceMine = practicePicks.filter((p) => p.mine).map((p) => playerPosition(players[p.playerId])).filter(Boolean) as string[];
-    return [...real, ...practiceMine];
-  }, [myRoster, players, practicePicks]);
+  const myDraftPositions = useMemo(() => (myRoster?.players ?? []).map((id) => playerPosition(players[id])).filter(Boolean) as string[], [myRoster, players]);
 
   const recommendations = useMemo<Recommendation[]>(() => {
     if (!league) return [];
     return Object.values(players)
-      .filter((p) => !draftBlockedIds.has(p.player_id) && fantasyPositions.includes(playerPosition(p) ?? "") && p.status !== "Inactive")
+      .filter((p) => !draftedIds.has(p.player_id) && fantasyPositions.includes(playerPosition(p) ?? "") && p.status !== "Inactive")
       .flatMap((player): Recommendation[] => {
         const projection = seasonProjection(player.player_id);
         const rating = draftScore(player, league.roster_positions, myDraftPositions, projection, percentile(projection, seasonProjectionValues));
         return rating ? [{ player, rating, seasonProjection: projection }] : [];
       })
       .sort((a, b) => b.rating.score - a.rating.score || (b.seasonProjection ?? 0) - (a.seasonProjection ?? 0))
-      .slice(0, 80);
-  }, [players, draftBlockedIds, league, myDraftPositions, seasonProjectionValues, intelligence.season, scoring]);
+      .slice(0, 50);
+  }, [players, draftedIds, league, myDraftPositions, seasonProjectionValues, intelligence.season, scoring]);
 
-  const waiverTargets = useMemo(() => {
-    return trendingAdds
-      .filter((t) => !rosteredIds.has(t.player_id))
-      .map((trend) => {
-        const player = players[trend.player_id];
-        if (!player) return null;
-        const projection = weeklyProjection(player.player_id);
-        const score = waiverScore(player, trend.count, projection, percentile(projection, weeklyProjectionValues));
-        return score == null ? null : { trend, player, score, projection };
-      })
-      .filter((x): x is NonNullable<typeof x> => Boolean(x))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 30);
-  }, [trendingAdds, rosteredIds, players, weeklyProjectionValues, intelligence.weekly, scoring]);
+  const waiverTargets = useMemo(() => trendingAdds
+    .filter((t) => !rosteredIds.has(t.player_id))
+    .map((trend) => {
+      const player = players[trend.player_id];
+      if (!player) return null;
+      const projection = weeklyProjection(player.player_id);
+      const score = waiverScore(player, trend.count, projection, percentile(projection, weeklyProjectionValues));
+      return score == null ? null : { trend, player, score, projection };
+    })
+    .filter((x): x is NonNullable<typeof x> => Boolean(x))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 30), [trendingAdds, rosteredIds, players, weeklyProjectionValues, intelligence.weekly, scoring]);
 
   const lineupMoves = useMemo(() => {
     if (!league || !myRoster?.players?.length || !myRoster.starters?.length) return [];
     const starterSet = new Set(myRoster.starters);
     const benchIds = myRoster.players.filter((id) => !starterSet.has(id));
-    const moves: Array<ReturnType<typeof lineupDecision> & { slot: string }> = [];
+    const moves: Array<NonNullable<ReturnType<typeof lineupDecision>> & { slot: string }> = [];
 
     myRoster.starters.forEach((starterId, index) => {
       const starter = players[starterId];
@@ -141,7 +121,7 @@ export default function Home() {
       const slot = league.roster_positions[index] ?? starter.position ?? "FLEX";
       const eligible = benchIds
         .map((id) => players[id])
-        .filter(Boolean)
+        .filter((candidate): candidate is SleeperPlayer => Boolean(candidate))
         .filter((candidate) => eligibleForSlot(candidate, slot))
         .map((candidate) => ({ player: candidate, projection: weeklyProjection(candidate.player_id) }))
         .filter((candidate) => candidate.projection != null)
@@ -150,14 +130,13 @@ export default function Home() {
       const decision = lineupDecision({ player: starter, projection: weeklyProjection(starterId) }, eligible[0]);
       if (decision) moves.push({ ...decision, slot });
     });
-
-    return moves.filter(Boolean).sort((a, b) => (b?.delta ?? 0) - (a?.delta ?? 0));
+    return moves.sort((a, b) => b.delta - a.delta);
   }, [league, myRoster, players, intelligence.weekly, scoring]);
 
   const activeDraft = drafts.find((d) => d.status === "drafting") ?? drafts[0];
-  const practiceMode = !activeDraft || activeDraft.status !== "drafting";
   const currentWeek = nflState?.display_week || nflState?.week || 1;
   const selectedPlayer = selectedPlayerId ? players[selectedPlayerId] : null;
+  const injuries = (myRoster?.players ?? []).map((id) => players[id]).filter((p): p is SleeperPlayer => Boolean(p?.injury_status));
 
   async function loadAccount() {
     if (!username.trim()) return;
@@ -175,8 +154,8 @@ export default function Home() {
   async function selectLeague(selected: SleeperLeague, preserveTab = false) {
     setLoading(true); setError("");
     try {
-      const [rs, ds, playerResponse, adds, drops, state] = await Promise.all([
-        sleeper.rosters(selected.league_id), sleeper.drafts(selected.league_id), fetch("/api/players"), sleeper.trending("add"), sleeper.trending("drop"), sleeper.state(),
+      const [rs, us, ds, playerResponse, adds, drops, state] = await Promise.all([
+        sleeper.rosters(selected.league_id), sleeper.users(selected.league_id), sleeper.drafts(selected.league_id), fetch("/api/players"), sleeper.trending("add"), sleeper.trending("drop"), sleeper.state(),
       ]);
       if (!playerResponse.ok) throw new Error("Could not load the Sleeper player database.");
       const playerData = await playerResponse.json() as PlayerMap;
@@ -189,96 +168,147 @@ export default function Home() {
         fetch(`/api/intelligence?season=${selected.season}&week=${week}`),
       ]);
       const intel = intelResponse.ok ? await intelResponse.json() as IntelligencePayload : { weekly: {}, season: {}, weekNumber: week, source: "unavailable" };
-      setLeague(selected); setRosters(rs); setDrafts(ds); setPicks(draftPicks); setPlayers(playerData); setTrendingAdds(adds); setTrendingDrops(drops); setNflState(state); setMatchups(matchupData); setTransactions(transactionData); setIntelligence(intel); setLastUpdated(new Date());
-      if (!preserveTab) { setPracticePicks([]); setTab("dashboard"); }
-      window.localStorage.setItem("fantasy-copilot-league", selected.league_id);
+      setLeague(selected); setRosters(rs); setMembers(us); setDrafts(ds); setPicks(draftPicks); setPlayers(playerData); setTrendingAdds(adds); setTrendingDrops(drops); setNflState(state); setMatchups(matchupData); setTransactions(transactionData); setIntelligence(intel); setLastUpdated(new Date());
+      if (!preserveTab) setTab("home");
     } catch (e) { setError(e instanceof Error ? e.message : "Could not load league"); }
     finally { setLoading(false); }
   }
 
-  function mockPick(playerId: string, mine = true) { setPracticePicks((old) => [...old, { playerId, mine }]); }
-  function simulateOtherManagers() {
-    const amount = Math.max(1, (league?.total_rosters ?? 10) - 1);
-    setPracticePicks((old) => [...old, ...recommendations.slice(0, amount).map((r) => ({ playerId: r.player.player_id, mine: false }))]);
-  }
-
-  if (!league) return <main className="shell"><section className="card setup"><div className="eyebrow">NFL FANTASY WITHOUT THE NFL HOMEWORK</div><div className="brand"><h1>🏈 Fantasy Copilot</h1><p className="muted">Connect Sleeper once. The app turns your league into simple decisions.</p></div><div className="row setupRow"><input className="input" placeholder="Sleeper username" value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={(e) => e.key === "Enter" && loadAccount()} /><button className="btn" onClick={loadAccount} disabled={loading}>{loading ? "Loading…" : "Find my leagues"}</button></div>{error && <p className="error">{error}</p>}{user && <div className="leaguePicker"><p><strong>{user.display_name}</strong> · choose your 2026 league</p><div className="list">{leagues.map((l) => <button key={l.league_id} className="item clickable" onClick={() => selectLeague(l)}><span><strong>{l.name}</strong><span className="muted tiny">{l.total_rosters} teams · {l.status}</span></span><span>Open →</span></button>)}</div></div>}<div className="setupHints"><span>✓ Draft helper</span><span>✓ Start/sit advice</span><span>✓ Waiver radar</span><span>✓ Injury alerts</span></div></section></main>;
+  if (!league) return <main className="shell"><section className="card setup"><div className="eyebrow">FANTASY FOOTBALL, WITHOUT HAVING TO FOLLOW THE NFL</div><div className="brand"><h1>Fantasy Copilot</h1><p className="muted lead">Connect your Sleeper account. Each week, the site tells you what deserves attention and what can be left alone.</p></div><div className="row setupRow"><input className="input" placeholder="Sleeper username" value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={(e) => e.key === "Enter" && loadAccount()} /><button className="btn" onClick={loadAccount} disabled={loading}>{loading ? "Loading…" : "Connect Sleeper"}</button></div>{error && <p className="error">{error}</p>}{user && <div className="leaguePicker"><p><strong>{user.display_name}</strong> · choose your league</p><div className="list">{leagues.map((l) => <button key={l.league_id} className="item clickable" onClick={() => selectLeague(l)}><span><strong>{l.name}</strong><span className="muted tiny">{l.total_rosters} teams · {l.status}</span></span><span>Open →</span></button>)}</div></div>}<div className="setupHints"><span>Weekly lineup</span><span>Waivers</span><span>Trades</span><span>Injury checks</span></div></section></main>;
 
   return <main className="shell">
-    <header className="topbar"><div className="brand"><h1>🏈 Fantasy Copilot</h1><div className="muted"><span className="leagueName">{league.name}</span> · Week {currentWeek} · {formatScoring(scoring)}</div></div><div className="row"><button className="btn secondary" onClick={() => selectLeague(league, true)} disabled={loading}>{loading ? "Refreshing…" : "↻ Refresh"}</button><button className="btn secondary" onClick={() => setLeague(null)}>Change league</button></div></header>
-    <nav className="nav">{(["dashboard", "draft", "lineup", "waivers", "players", "league", "guide"] as Tab[]).map((t) => <button key={t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{tabLabel(t)}</button>)}</nav>
-    {error && <p className="error">{error}</p>}{lastUpdated && <div className="syncLine"><span className="statusDot" /> Synced with Sleeper {lastUpdated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · Projection feed: {Object.keys(intelligence.weekly).length ? "available" : "limited"}</div>}
-    {tab === "dashboard" && <Dashboard league={league} roster={myRoster} activeDraft={activeDraft} players={players} recommendations={recommendations} waiverTargets={waiverTargets} lineupMoves={lineupMoves} matchups={matchups} rosters={rosters} currentWeek={currentWeek} weeklyProjection={weeklyProjection} setTab={setTab} practiceMode={practiceMode} />}
-    {tab === "draft" && <DraftView league={league} activeDraft={activeDraft} realPicks={picks} practiceMode={practiceMode} practicePicks={practicePicks} players={players} recommendations={recommendations} onPick={mockPick} onUndo={() => setPracticePicks((old) => old.slice(0, -1))} onReset={() => setPracticePicks([])} onSimulateOthers={simulateOtherManagers} />}
+    <header className="topbar"><div className="brand"><h1>Fantasy Copilot</h1><div className="muted"><span className="leagueName">{league.name}</span> · Week {currentWeek} · {formatScoring(scoring)}</div></div><div className="row"><button className="btn secondary" onClick={() => selectLeague(league, true)} disabled={loading}>{loading ? "Refreshing…" : "Refresh data"}</button><button className="btn ghost" onClick={() => setLeague(null)}>Change league</button></div></header>
+    <nav className="nav">{(["home", "lineup", "waivers", "trades", "players", "league", "draft", "help"] as Tab[]).map((t) => <button key={t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{tabLabel(t)}</button>)}</nav>
+    {error && <p className="error">{error}</p>}{lastUpdated && <div className="syncLine"><span className="statusDot" /> Synced {lastUpdated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · {Object.keys(intelligence.weekly).length ? "weekly projections loaded" : "projection data limited"}</div>}
+
+    {tab === "home" && <HomeView roster={myRoster} players={players} lineupMoves={lineupMoves} waiverTargets={waiverTargets} injuries={injuries} setTab={setTab} currentWeek={currentWeek} weeklyProjection={weeklyProjection} matchups={matchups} rosters={rosters} />}
     {tab === "lineup" && <LineupView league={league} roster={myRoster} players={players} moves={lineupMoves} weeklyProjection={weeklyProjection} currentWeek={currentWeek} />}
     {tab === "waivers" && <WaiverView targets={waiverTargets} drops={trendingDrops} roster={myRoster} players={players} weeklyProjection={weeklyProjection} onPlayer={setSelectedPlayerId} />}
+    {tab === "trades" && <TradeView myRoster={myRoster} rosters={rosters} members={members} players={players} seasonProjection={seasonProjection} tradeGive={tradeGive} tradeReceive={tradeReceive} setTradeGive={setTradeGive} setTradeReceive={setTradeReceive} transactions={transactions} />}
     {tab === "players" && <PlayersView players={players} query={query} setQuery={setQuery} rosteredIds={rosteredIds} weeklyProjection={weeklyProjection} seasonProjection={seasonProjection} onPlayer={setSelectedPlayerId} />}
-    {tab === "league" && <LeagueView league={league} rosters={rosters} matchupData={matchups} transactions={transactions} players={players} myRoster={myRoster} weeklyProjection={weeklyProjection} currentWeek={currentWeek} />}
-    {tab === "guide" && <GuideView />}
+    {tab === "league" && <LeagueView league={league} rosters={rosters} members={members} matchupData={matchups} transactions={transactions} players={players} myRoster={myRoster} weeklyProjection={weeklyProjection} currentWeek={currentWeek} />}
+    {tab === "draft" && <DraftView activeDraft={activeDraft} realPicks={picks} recommendations={recommendations} />}
+    {tab === "help" && <HelpView setTab={setTab} />}
     {selectedPlayer && <PlayerDrawer player={selectedPlayer} rostered={rosteredIds.has(selectedPlayer.player_id)} weekly={weeklyProjection(selectedPlayer.player_id)} season={seasonProjection(selectedPlayer.player_id)} onClose={() => setSelectedPlayerId(null)} />}
   </main>;
 }
 
-function Dashboard({ league, roster, activeDraft, players, recommendations, waiverTargets, lineupMoves, matchups, rosters, currentWeek, weeklyProjection, setTab, practiceMode }: any) {
-  const injuries = (roster?.players ?? []).map((id: string) => players[id]).filter((p: SleeperPlayer | undefined) => p?.injury_status);
+function HomeView({ roster, players, lineupMoves, waiverTargets, injuries, setTab, currentWeek, weeklyProjection, matchups, rosters }: any) {
   const myMatch = matchups.find((m: SleeperMatchup) => m.roster_id === roster?.roster_id);
   const opponent = myMatch?.matchup_id != null ? matchups.find((m: SleeperMatchup) => m.matchup_id === myMatch.matchup_id && m.roster_id !== roster?.roster_id) : null;
-  const myProjected = sumProjected(roster?.starters ?? [], weeklyProjection);
   const opponentRoster = opponent ? rosters.find((r: SleeperRoster) => r.roster_id === opponent.roster_id) : null;
-  const opponentProjected = sumProjected(opponentRoster?.starters ?? [], weeklyProjection);
-  const top = recommendations[0];
-  return <><section className="decisionHero card"><div><div className="eyebrow">WHAT SHOULD I DO?</div><h2>{lineupMoves[0] ? `Make ${lineupMoves.length} lineup change${lineupMoves.length > 1 ? "s" : ""}` : injuries.length ? `Check ${injuries.length} injury flag${injuries.length > 1 ? "s" : ""}` : practiceMode ? "Practice your draft" : "You are mostly set"}</h2><p className="muted">{lineupMoves[0] ? `${nameOf(lineupMoves[0].in)} projects ${lineupMoves[0].delta} points above ${nameOf(lineupMoves[0].out)}.` : injuries[0] ? `${nameOf(injuries[0])} is currently listed ${injuries[0].injury_status}.` : practiceMode ? "Build a mock roster and let the dashboard react to every pick." : "No obvious high-priority move is showing right now."}</p></div><button className="btn" onClick={() => setTab(lineupMoves[0] || injuries.length ? "lineup" : practiceMode ? "draft" : "waivers")}>Open recommendation →</button></section><div className="grid">
-    <MetricCard title={`WEEK ${currentWeek} PROJECTION`} value={myProjected != null ? myProjected.toFixed(1) : "—"} detail={opponentProjected != null ? `Opponent: ${opponentProjected.toFixed(1)} · ${myProjected! >= opponentProjected ? "projected ahead" : "projected behind"}` : "Projection data will fill this automatically."} tone={myProjected != null && opponentProjected != null ? (myProjected >= opponentProjected ? "positive" : "warning") : ""} />
-    <MetricCard title="LINEUP ACTIONS" value={String(lineupMoves.length)} detail={lineupMoves.length ? "Potential start/sit upgrades found" : "No clear swap detected"} tone={lineupMoves.length ? "warning" : "positive"} />
-    <MetricCard title="INJURY FLAGS" value={String(injuries.length)} detail={injuries.length ? injuries.slice(0, 2).map(nameOf).join(", ") : "No flagged players on your roster"} tone={injuries.length ? "warning" : "positive"} />
-    <section className="card span8"><div className="sectionHeader"><div><div className="eyebrow">ACTION QUEUE</div><h2 className="sectionTitle">Things worth your attention</h2></div></div><div className="actions">{lineupMoves.slice(0, 2).map((move: any) => <button className="action good clickable" key={`${move.in.player_id}-${move.out.player_id}`} onClick={() => setTab("lineup")}><strong>Start {nameOf(move.in)} over {nameOf(move.out)}</strong><div className="muted">+{move.delta} projected points · {move.confidence} confidence</div></button>)}{injuries.slice(0, 2).map((p: SleeperPlayer) => <button className="action warn clickable" key={p.player_id} onClick={() => setTab("lineup")}><strong>Monitor {nameOf(p)}</strong><div className="muted">{p.injury_status}{p.injury_body_part ? ` · ${p.injury_body_part}` : ""}{p.practice_participation ? ` · ${p.practice_participation}` : ""}</div></button>)}{practiceMode && top && <button className="action clickable" onClick={() => setTab("draft")}><strong>Practice draft recommendation: {nameOf(top.player)}</strong><div className="muted">Current decision score {top.rating.score}/100. Use the mock draft before the real draft starts.</div></button>}{waiverTargets[0] && <button className="action clickable" onClick={() => setTab("waivers")}><strong>Waiver radar: {nameOf(waiverTargets[0].player)}</strong><div className="muted">Trending add and currently unrostered in your league.</div></button>}</div></section>
-    <section className="card span4"><div className="eyebrow">LEAGUE FORMAT</div><h2 className="sectionTitle">What matters here</h2><div className="list compact"><div className="item"><span>Teams</span><strong>{league.total_rosters}</strong></div><div className="item"><span>Scoring</span><strong>{formatScoring(scoringKey(league.scoring_settings))}</strong></div><div className="item"><span>Starters</span><strong>{league.roster_positions.filter((p: string) => p !== "BN").length}</strong></div><div className="item"><span>Draft</span><strong>{activeDraft?.status ?? "not created"}</strong></div></div></section>
-  </div></>;
+  const mine = sumProjected(roster?.starters ?? [], weeklyProjection);
+  const theirs = sumProjected(opponentRoster?.starters ?? [], weeklyProjection);
+
+  return <div className="pageStack">
+    <section className="welcome card"><div><div className="eyebrow">YOUR WEEKLY ROUTINE</div><h2>Open this page once or twice a week. Follow the steps in order.</h2><p className="muted lead">You do not need to research NFL news yourself. Start here, handle anything flagged, then make the actual changes in Sleeper.</p></div><button className="btn" onClick={() => setTab("help")}>How this works</button></section>
+
+    <section className="workflow">
+      <WorkflowStep number="1" title="Check your lineup" text={lineupMoves.length ? `${lineupMoves.length} possible improvement${lineupMoves.length > 1 ? "s" : ""} found.` : "No obvious lineup swap found."} status={lineupMoves.length ? "attention" : "good"} button="Open lineup" onClick={() => setTab("lineup")} />
+      <WorkflowStep number="2" title="Check injuries" text={injuries.length ? `${injuries.length} player${injuries.length > 1 ? "s" : ""} on your roster have an injury flag.` : "No injury flags on your roster."} status={injuries.length ? "attention" : "good"} button="Review lineup" onClick={() => setTab("lineup")} />
+      <WorkflowStep number="3" title="Scan waivers" text={waiverTargets[0] ? `${nameOf(waiverTargets[0].player)} is the top available player on the radar.` : "Nothing notable is showing on waivers."} status={waiverTargets[0] ? "neutral" : "good"} button="Open waivers" onClick={() => setTab("waivers")} />
+      <WorkflowStep number="4" title="Consider trades only if useful" text="You do not need to trade every week. Use the analyzer if someone sends you an offer or you want to improve a weak position." status="neutral" button="Trade analyzer" onClick={() => setTab("trades")} />
+    </section>
+
+    <div className="grid">
+      <MetricCard title={`WEEK ${currentWeek} MATCHUP`} value={mine != null ? mine.toFixed(1) : "—"} detail={theirs != null ? `Opponent ${theirs.toFixed(1)} · ${mine! >= theirs ? "you project ahead" : "you project behind"}` : "Opponent projection will appear when available."} tone={mine != null && theirs != null ? (mine >= theirs ? "positive" : "warning") : ""} />
+      <MetricCard title="LINEUP CHANGES" value={String(lineupMoves.length)} detail={lineupMoves[0] ? `Best move: +${lineupMoves[0].delta} projected points` : "Nothing obvious to change"} tone={lineupMoves.length ? "warning" : "positive"} />
+      <MetricCard title="INJURY FLAGS" value={String(injuries.length)} detail={injuries[0] ? injuries.slice(0, 2).map(nameOf).join(", ") : "Your roster is clear"} tone={injuries.length ? "warning" : "positive"} />
+    </div>
+
+    <section className="card"><div className="eyebrow">IF YOU ONLY DO ONE THING</div><h2 className="sectionTitle">{lineupMoves[0] ? `Start ${nameOf(lineupMoves[0].in)} over ${nameOf(lineupMoves[0].out)}` : injuries[0] ? `Check ${nameOf(injuries[0])} before kickoff` : waiverTargets[0] ? `Look at ${nameOf(waiverTargets[0].player)} on waivers` : "Your team looks fine for now"}</h2><p className="muted">{lineupMoves[0] ? `The projection difference is +${lineupMoves[0].delta} points. Make the change inside Sleeper.` : injuries[0] ? `${nameOf(injuries[0])} is currently listed ${injuries[0].injury_status}.` : waiverTargets[0] ? "They are available in your league and currently getting attention across Sleeper." : "Come back closer to kickoff and refresh the data."}</p></section>
+  </div>;
 }
 
-function MetricCard({ title, value, detail, tone = "" }: { title: string; value: string; detail: string; tone?: string }) { return <section className="card span4"><div className="eyebrow">{title}</div><div className={`metric ${tone}`}>{value}</div><div className="muted tiny">{detail}</div></section>; }
+function WorkflowStep({ number, title, text, status, button, onClick }: any) {
+  return <section className={`workflowStep ${status}`}><div className="stepNumber">{number}</div><div className="stepBody"><h3>{title}</h3><p>{text}</p></div><button className="textButton" onClick={onClick}>{button} →</button></section>;
+}
 
-function DraftView({ league, realPicks, practiceMode, practicePicks, players, recommendations, onPick, onUndo, onReset, onSimulateOthers }: any) {
-  const top = recommendations[0]; const mine = practicePicks.filter((p: PracticePick) => p.mine); const pickNumber = practicePicks.length + 1;
-  return <div className="grid"><section className="card span12 draftToolbar"><div><div className="pill">{practiceMode ? "PRACTICE MODE" : "LIVE SLEEPER DRAFT"}</div><h2>{practiceMode ? `Overall mock pick #${pickNumber}` : `${realPicks.length} picks completed`}</h2><p className="muted">{practiceMode ? "Pick for yourself, then simulate the other managers. Recommendations recalculate as the board changes." : "Refresh periodically during the draft. Sleeper picks are removed automatically."}</p></div>{practiceMode && <div className="row"><button className="btn" onClick={onSimulateOthers}>Simulate other managers</button><button className="btn secondary" onClick={onUndo} disabled={!practicePicks.length}>Undo</button><button className="btn secondary" onClick={onReset} disabled={!practicePicks.length}>Reset</button></div>}</section>
-    <section className="card span8 heroRecommendation"><div className="eyebrow">BEST PICK RIGHT NOW</div>{top ? <><div className="recommendationTitle"><div><h2>{nameOf(top.player)}</h2><div className="muted">{top.rating.position} · {top.player.team ?? "FA"}{top.seasonProjection != null ? ` · ${top.seasonProjection.toFixed(1)} projected season pts` : ""}</div></div><div className="bigScore">{top.rating.score}</div></div><p>{top.rating.reason}</p><div className="bars">{Object.entries(top.rating.parts).map(([label, value]) => <div className="barLine" key={label}><span>{pretty(label)}</span><div className="bar"><div style={{ width: `${value}%` }} /></div><strong>{String(value)}</strong></div>)}</div>{practiceMode && <button className="btn draftButton" onClick={() => onPick(top.player.player_id, true)}>Draft {nameOf(top.player)}</button>}</> : <div className="empty">No eligible player recommendation available.</div>}</section>
-    <section className="card span4"><div className="eyebrow">YOUR MOCK ROSTER</div><h2 className="sectionTitle">{mine.length} players</h2><div className="positionCounts">{fantasyPositions.map((pos) => <span key={pos}><strong>{mine.filter((pick: PracticePick) => playerPosition(players[pick.playerId]) === pos).length}</strong>{pos}</span>)}</div><div className="list compact">{mine.slice(-8).reverse().map((pick: PracticePick, i: number) => <div className="item" key={`${pick.playerId}-${i}`}><span>{nameOf(players[pick.playerId])}</span><strong>{playerPosition(players[pick.playerId])}</strong></div>)}</div><p className="muted tiny note">Target roster: {league.roster_positions.join(" · ")}</p></section>
-    <section className="card span7"><div className="eyebrow">SHORTLIST</div><h2 className="sectionTitle">Next best picks</h2><div className="list">{recommendations.slice(1, 15).map((r: Recommendation, i: number) => <button className="item clickable" key={r.player.player_id} onClick={() => practiceMode && onPick(r.player.player_id, true)}><span><strong>#{i + 2} {nameOf(r.player)}</strong><span className="muted tiny">{r.rating.position} · {r.player.team ?? "FA"}{r.seasonProjection != null ? ` · ${r.seasonProjection.toFixed(1)} proj.` : ""}</span></span><span className="score">{r.rating.score}</span></button>)}</div></section>
-    <section className="card span5"><div className="eyebrow">BOARD ACTIVITY</div><h2 className="sectionTitle">{practiceMode ? "Recent simulated picks" : "Recent Sleeper picks"}</h2><div className="list compact">{practiceMode ? practicePicks.slice(-12).reverse().map((pick: PracticePick, i: number) => <div className="item" key={`${pick.playerId}-${i}`}><span><strong>{nameOf(players[pick.playerId])}</strong><span className="muted tiny">{pick.mine ? "YOU" : "OTHER MANAGER"} · {playerPosition(players[pick.playerId])}</span></span></div>) : realPicks.slice(-12).reverse().map((p: SleeperDraftPick) => <div className="item" key={`${p.pick_no}-${p.player_id}`}><span><strong>#{p.pick_no} {p.metadata?.first_name} {p.metadata?.last_name}</strong><span className="muted tiny">{p.metadata?.position} · {p.metadata?.team}</span></span><span>R{p.round}</span></div>)}</div>{practiceMode && !practicePicks.length && <div className="empty">Make your first mock pick above.</div>}</section></div>;
+function MetricCard({ title, value, detail, tone = "" }: { title: string; value: string; detail: string; tone?: string }) {
+  return <section className="card span4"><div className="eyebrow">{title}</div><div className={`metric ${tone}`}>{value}</div><div className="muted tiny">{detail}</div></section>;
 }
 
 function LineupView({ league, roster, players, moves, weeklyProjection, currentWeek }: any) {
-  if (!roster?.players?.length) return <section className="card emptyState"><h2>No roster yet</h2><p>Your real lineup page becomes useful immediately after the draft. Until then, use Draft → Practice Mode.</p></section>;
-  const starters = roster.starters ?? []; const starterSet = new Set(starters); const bench = roster.players.filter((id: string) => !starterSet.has(id)); const injuries = roster.players.map((id: string) => players[id]).filter((p: SleeperPlayer | undefined) => p?.injury_status);
-  return <div className="grid"><section className="card span12"><div className="eyebrow">WEEK {currentWeek}</div><h2 className="sectionTitle">Start / sit assistant</h2><p className="muted">Sleeper is read-only, so this dashboard recommends changes; you make the final lineup change inside Sleeper.</p></section>{moves.length > 0 && <section className="card span12 recommendationPanel"><div className="eyebrow">RECOMMENDED CHANGES</div><div className="actions">{moves.map((move: any) => <div className="lineupMove" key={`${move.in.player_id}-${move.out.player_id}`}><div className="swap"><span className="benchBadge">BENCH</span><strong>{nameOf(move.out)}</strong><span className="arrow">→</span><span className="startBadge">START</span><strong>{nameOf(move.in)}</strong></div><div className="positive">+{move.delta} projected pts · {move.confidence}</div></div>)}</div></section>}{injuries.length > 0 && <section className="card span12 injuryPanel"><div className="eyebrow">INJURY WATCH</div><div className="list">{injuries.map((p: SleeperPlayer) => <div className="item" key={p.player_id}><span><strong>{nameOf(p)}</strong><span className="muted tiny">{p.position} · {p.team ?? "FA"} · {p.injury_body_part ?? "injury"}</span></span><span className="tag danger">{p.injury_status}</span></div>)}</div></section>}<section className="card span7"><div className="eyebrow">STARTERS</div><div className="list">{starters.map((id: string, index: number) => <PlayerLine key={id} player={players[id]} slot={league.roster_positions[index] ?? players[id]?.position} projection={weeklyProjection(id)} />)}</div></section><section className="card span5"><div className="eyebrow">BENCH</div><div className="list">{bench.map((id: string) => <PlayerLine key={id} player={players[id]} slot="BN" projection={weeklyProjection(id)} />)}</div></section></div>;
+  if (!roster?.players?.length) return <section className="card emptyState"><h2>Your team is empty</h2><p>Once the draft is finished, your Sleeper roster will appear here automatically.</p></section>;
+  const starters = roster.starters ?? [];
+  const starterSet = new Set(starters);
+  const bench = roster.players.filter((id: string) => !starterSet.has(id));
+  const injuries = roster.players.map((id: string) => players[id]).filter((p: SleeperPlayer | undefined) => p?.injury_status);
+
+  return <div className="grid">
+    <section className="card span12 pageIntro"><div><div className="eyebrow">WEEK {currentWeek}</div><h2>Set your lineup</h2><p className="muted">Do this after waivers clear and again before the first games begin. The app recommends changes; you make them in Sleeper.</p></div></section>
+    {moves.length > 0 ? <section className="card span12 recommendationPanel"><div className="eyebrow">RECOMMENDED CHANGES</div><div className="actions">{moves.map((move: any) => <div className="lineupMove" key={`${move.in.player_id}-${move.out.player_id}`}><div className="swap"><span className="benchBadge">BENCH</span><strong>{nameOf(move.out)}</strong><span className="arrow">→</span><span className="startBadge">START</span><strong>{nameOf(move.in)}</strong></div><div className="positive">+{move.delta} projected pts · {move.confidence}</div></div>)}</div></section> : <section className="card span12 calm"><strong>No obvious lineup changes.</strong><span className="muted"> Your current starters are not clearly worse than the bench based on the available projections.</span></section>}
+    {injuries.length > 0 && <section className="card span12 injuryPanel"><div className="eyebrow">CHECK BEFORE KICKOFF</div><div className="list">{injuries.map((p: SleeperPlayer) => <div className="item" key={p.player_id}><span><strong>{nameOf(p)}</strong><span className="muted tiny">{p.position} · {p.team ?? "FA"}{p.injury_body_part ? ` · ${p.injury_body_part}` : ""}</span></span><span className="tag danger">{p.injury_status}</span></div>)}</div></section>}
+    <section className="card span7"><div className="eyebrow">STARTING LINEUP</div><div className="list">{starters.map((id: string, index: number) => <PlayerLine key={id} player={players[id]} slot={league.roster_positions[index] ?? players[id]?.position} projection={weeklyProjection(id)} />)}</div></section>
+    <section className="card span5"><div className="eyebrow">BENCH</div><div className="list">{bench.map((id: string) => <PlayerLine key={id} player={players[id]} slot="BN" projection={weeklyProjection(id)} />)}</div></section>
+  </div>;
 }
 
-function PlayerLine({ player, slot, projection }: { player?: SleeperPlayer; slot: string; projection?: number }) { return <div className="item"><span className="playerRow"><span className="slotBadge">{slot}</span><span><strong>{nameOf(player)}</strong><span className="muted tiny">{player?.position ?? "?"} · {player?.team ?? "FA"}{player?.injury_status ? ` · ${player.injury_status}` : ""}</span></span></span><span><strong>{projection != null ? projection.toFixed(1) : "—"}</strong><span className="muted tiny">proj.</span></span></div>; }
+function PlayerLine({ player, slot, projection }: { player?: SleeperPlayer; slot: string; projection?: number }) {
+  return <div className="item"><span className="playerRow"><span className="slotBadge">{slot}</span><span><strong>{nameOf(player)}</strong><span className="muted tiny">{player?.position ?? "?"} · {player?.team ?? "FA"}{player?.injury_status ? ` · ${player.injury_status}` : ""}</span></span></span><span className="projection"><strong>{projection != null ? projection.toFixed(1) : "—"}</strong><span className="muted tiny">projected</span></span></div>;
+}
 
 function WaiverView({ targets, drops, roster, players, weeklyProjection, onPlayer }: any) {
-  const benchIds = roster?.players?.filter((id: string) => !(roster?.starters ?? []).includes(id)) ?? []; const worstBench = [...benchIds].sort((a, b) => (weeklyProjection(a) ?? -1) - (weeklyProjection(b) ?? -1));
-  return <div className="grid"><section className="card span12"><div className="eyebrow">WAIVER WIRE</div><h2 className="sectionTitle">Available players getting attention</h2><p className="muted">Higher scores combine Sleeper add trends, fantasy position value, health and projections when available. You still add/drop players inside Sleeper.</p></section><section className="card span8"><div className="list">{targets.length ? targets.map((x: any, i: number) => { const samePosDrop = worstBench.map((id: string) => players[id]).find((p: SleeperPlayer | undefined) => p && playerPosition(p) === playerPosition(x.player)); return <button className="item clickable" key={x.player.player_id} onClick={() => onPlayer(x.player.player_id)}><span><strong>#{i + 1} {nameOf(x.player)}</strong><span className="muted tiny">{x.player.position} · {x.player.team ?? "FA"} · {x.trend.count} trending adds{x.projection != null ? ` · ${x.projection.toFixed(1)} week proj.` : ""}{samePosDrop ? ` · possible drop: ${nameOf(samePosDrop)}` : ""}</span></span><span className="score">{x.score}</span></button>; }) : <div className="empty">No waiver candidates loaded yet.</div>}</div></section><section className="card span4"><div className="eyebrow">TRENDING DOWN</div><h2 className="sectionTitle">Players people are dropping</h2><div className="list compact">{drops.slice(0, 15).map((d: any) => <div className="item" key={d.player_id}><span><strong>{nameOf(players[d.player_id])}</strong><span className="muted tiny">{players[d.player_id]?.position ?? "?"}</span></span><span>{d.count}</span></div>)}</div></section></div>;
+  const benchIds = roster?.players?.filter((id: string) => !(roster?.starters ?? []).includes(id)) ?? [];
+  const worstBench = [...benchIds].sort((a, b) => (weeklyProjection(a) ?? -1) - (weeklyProjection(b) ?? -1));
+  return <div className="grid"><section className="card span12 pageIntro"><div><div className="eyebrow">WAIVERS</div><h2>Find useful players nobody owns</h2><p className="muted">Check this early in the week. If a player looks like a clear upgrade, add them in Sleeper and drop the suggested weaker bench option.</p></div></section><section className="card span8"><div className="list">{targets.length ? targets.map((x: any, i: number) => { const samePosDrop = worstBench.map((id: string) => players[id]).find((p: SleeperPlayer | undefined) => p && playerPosition(p) === playerPosition(x.player)); return <button className="item clickable" key={x.player.player_id} onClick={() => onPlayer(x.player.player_id)}><span><strong>#{i + 1} {nameOf(x.player)}</strong><span className="muted tiny">{x.player.position} · {x.player.team ?? "FA"}{x.projection != null ? ` · ${x.projection.toFixed(1)} projected` : ""}{samePosDrop ? ` · possible drop: ${nameOf(samePosDrop)}` : ""}</span></span><span className="score">{x.score}</span></button>; }) : <div className="empty">No notable available players are showing right now.</div>}</div></section><section className="card span4"><div className="eyebrow">TRENDING DROPS</div><p className="muted tiny">Useful mainly as a warning signal. Do not automatically copy other managers.</p><div className="list compact">{drops.slice(0, 12).map((d: any) => <div className="item" key={d.player_id}><span><strong>{nameOf(players[d.player_id])}</strong><span className="muted tiny">{players[d.player_id]?.position ?? "?"}</span></span><span>{d.count}</span></div>)}</div></section></div>;
 }
 
-function PlayersView({ players, query, setQuery, rosteredIds, weeklyProjection, seasonProjection, onPlayer }: { players: PlayerMap; query: string; setQuery: (value: string) => void; rosteredIds: Set<string>; weeklyProjection: (id: string) => number | undefined; seasonProjection: (id: string) => number | undefined; onPlayer: (id: string) => void }) {
-  const filtered = Object.values(players).filter((p) => fantasyPositions.includes(playerPosition(p) ?? "") && p.status !== "Inactive" && nameOf(p).toLowerCase().includes(query.toLowerCase())).sort((a, b) => (seasonProjection(b.player_id) ?? 0) - (seasonProjection(a.player_id) ?? 0)).slice(0, 150);
-  return <section className="card"><div className="eyebrow">PLAYER EXPLORER</div><h2 className="sectionTitle">Search anyone</h2><input className="input search" placeholder="Search NFL players…" value={query} onChange={(e) => setQuery(e.target.value)} /><div className="tableHeader playerTable"><span>Player</span><span>Week</span><span>Season</span><span>Status</span></div><div className="list">{filtered.map((p) => <button className="item clickable playerTable" key={p.player_id} onClick={() => onPlayer(p.player_id)}><span><strong>{nameOf(p)}</strong><span className="muted tiny">{p.position} · {p.team ?? "FA"}</span></span><strong>{weeklyProjection(p.player_id)?.toFixed(1) ?? "—"}</strong><strong>{seasonProjection(p.player_id)?.toFixed(0) ?? "—"}</strong><span className="pill">{rosteredIds.has(p.player_id) ? "ROSTERED" : "AVAILABLE"}</span></button>)}</div></section>;
+function TradeView({ myRoster, rosters, members, players, seasonProjection, tradeGive, tradeReceive, setTradeGive, setTradeReceive, transactions }: any) {
+  const mine = (myRoster?.players ?? []).map((id: string) => players[id]).filter((p: SleeperPlayer | undefined): p is SleeperPlayer => Boolean(p));
+  const otherPlayers = rosters.filter((r: SleeperRoster) => r.roster_id !== myRoster?.roster_id).flatMap((r: SleeperRoster) => (r.players ?? []).map((id) => ({ player: players[id], roster: r }))).filter((x: any) => x.player);
+  const givePlayer = players[tradeGive];
+  const receiveEntry = otherPlayers.find((x: any) => x.player.player_id === tradeReceive);
+  const receivePlayer = receiveEntry?.player as SleeperPlayer | undefined;
+  const giveValue = givePlayer ? tradeValue(givePlayer, seasonProjection(givePlayer.player_id)) : undefined;
+  const receiveValue = receivePlayer ? tradeValue(receivePlayer, seasonProjection(receivePlayer.player_id)) : undefined;
+  const delta = giveValue != null && receiveValue != null ? receiveValue - giveValue : undefined;
+
+  return <div className="grid">
+    <section className="card span12 pageIntro"><div><div className="eyebrow">TRADE ANALYZER</div><h2>Use this when someone offers you a trade</h2><p className="muted">Select the player you would give away and the player you would receive. The score is a quick sanity check, not a guarantee. A close result means the trade is probably about team need rather than raw value.</p></div></section>
+    <section className="card span7"><div className="tradeGrid"><label><span>You give</span><select className="select" value={tradeGive} onChange={(e) => setTradeGive(e.target.value)}><option value="">Choose one of your players</option>{mine.sort((a,b) => tradeValue(b, seasonProjection(b.player_id)) - tradeValue(a, seasonProjection(a.player_id))).map((p) => <option key={p.player_id} value={p.player_id}>{nameOf(p)} · {p.position}</option>)}</select></label><div className="tradeArrow">⇄</div><label><span>You receive</span><select className="select" value={tradeReceive} onChange={(e) => setTradeReceive(e.target.value)}><option value="">Choose a player on another team</option>{otherPlayers.sort((a:any,b:any) => tradeValue(b.player, seasonProjection(b.player.player_id)) - tradeValue(a.player, seasonProjection(a.player.player_id))).map((x:any) => <option key={x.player.player_id} value={x.player.player_id}>{nameOf(x.player)} · {x.player.position} · {ownerName(x.roster, members)}</option>)}</select></label></div>
+      {givePlayer && receivePlayer ? <div className={`tradeResult ${delta != null && delta > 8 ? "win" : delta != null && delta < -8 ? "lose" : "even"}`}><div><div className="eyebrow">QUICK VERDICT</div><h3>{delta != null && delta > 8 ? "This looks favorable" : delta != null && delta < -8 ? "You may be giving up too much" : "This looks fairly close"}</h3><p className="muted">{nameOf(givePlayer)}: {giveValue} value · {nameOf(receivePlayer)}: {receiveValue} value{delta != null ? ` · difference ${delta > 0 ? "+" : ""}${delta}` : ""}</p></div></div> : <div className="empty">Choose both players to compare the trade.</div>}
+      <div className="tradeNotes"><strong>Before accepting:</strong><span> Prefer upgrades to your starting lineup over small bench upgrades.</span><span> Do not trade away healthy RB/WR depth unless you gain something meaningful.</span><span> Re-check injuries before accepting.</span></div>
+    </section>
+    <section className="card span5"><div className="eyebrow">RECENT LEAGUE TRADES</div><p className="muted tiny">Completed trades from the current Sleeper week.</p><div className="list compact">{transactions.filter((t: SleeperTransaction) => t.type === "trade").slice(0, 12).map((t: SleeperTransaction) => <div className="item" key={t.transaction_id}><span><strong>{t.roster_ids.map((id) => ownerName(rosters.find((r: SleeperRoster) => r.roster_id === id), members)).join(" ↔ ")}</strong><span className="muted tiny">{transactionSummary(t, players)}</span></span></div>)}</div>{!transactions.some((t: SleeperTransaction) => t.type === "trade") && <div className="empty">No trades recorded this week.</div>}</section>
+  </div>;
 }
 
-function LeagueView({ league, rosters, matchupData, transactions, players, myRoster, weeklyProjection, currentWeek }: any) {
-  const matchupRows = matchupData.filter((m: SleeperMatchup) => m.matchup_id != null).sort((a: SleeperMatchup, b: SleeperMatchup) => (a.matchup_id ?? 0) - (b.matchup_id ?? 0));
-  return <div className="grid"><section className="card span5"><div className="eyebrow">SETTINGS</div><h2 className="sectionTitle">League format</h2><div className="list compact"><div className="item"><span>Teams</span><strong>{league.total_rosters}</strong></div><div className="item"><span>Scoring</span><strong>{formatScoring(scoringKey(league.scoring_settings))}</strong></div><div className="item"><span>Roster</span><strong>{league.roster_positions.length} slots</strong></div><div className="item"><span>Status</span><strong>{league.status}</strong></div></div><h3>Roster slots</h3><div className="tagCloud">{league.roster_positions.map((p: string, i: number) => <span className="pill" key={`${p}-${i}`}>{p}</span>)}</div></section><section className="card span7"><div className="eyebrow">SCORING</div><h2 className="sectionTitle">Rules that affect your points</h2><div className="scoringGrid">{Object.entries(league.scoring_settings).sort((a: any, b: any) => a[0].localeCompare(b[0])).map(([key, value]: any) => <div className="item" key={key}><span>{pretty(key)}</span><strong>{value}</strong></div>)}</div></section><section className="card span7"><div className="eyebrow">WEEK {currentWeek} MATCHUPS</div><h2 className="sectionTitle">League scoreboard</h2><div className="list">{pairMatchups(matchupRows).map((pair, i) => <div className={`matchup ${pair.some((m) => m.roster_id === myRoster?.roster_id) ? "myMatchup" : ""}`} key={i}>{pair.map((m) => { const roster = rosters.find((r: SleeperRoster) => r.roster_id === m.roster_id); return <div className="matchTeam" key={m.roster_id}><strong>Roster {m.roster_id}{m.roster_id === myRoster?.roster_id ? " (YOU)" : ""}</strong><span>{m.points ?? 0} pts</span><span className="muted tiny">{sumProjected(roster?.starters ?? [], weeklyProjection)?.toFixed(1) ?? "—"} projected</span></div>; })}</div>)}</div>{!matchupRows.length && <div className="empty">Matchups will appear once Sleeper generates them.</div>}</section><section className="card span5"><div className="eyebrow">RECENT ACTIVITY</div><h2 className="sectionTitle">Transactions</h2><div className="list compact">{transactions.slice(0, 20).map((t: SleeperTransaction) => <div className="item" key={t.transaction_id}><span><strong>{pretty(t.type)}</strong><span className="muted tiny">{transactionSummary(t, players)}</span></span><span className="pill">{t.status}</span></div>)}</div>{!transactions.length && <div className="empty">No transactions this week.</div>}</section></div>;
+function PlayersView({ players, query, setQuery, rosteredIds, weeklyProjection, seasonProjection, onPlayer }: any) {
+  const list = Object.values(players) as SleeperPlayer[];
+  const filtered = list.filter((p) => fantasyPositions.includes(playerPosition(p) ?? "") && p.status !== "Inactive" && nameOf(p).toLowerCase().includes(query.toLowerCase())).sort((a,b) => (seasonProjection(b.player_id) ?? 0) - (seasonProjection(a.player_id) ?? 0)).slice(0,150);
+  return <section className="card"><div className="eyebrow">PLAYERS</div><h2 className="sectionTitle">Look up anyone</h2><p className="muted">Useful when someone mentions a player or includes them in a trade offer.</p><input className="input search" placeholder="Search player name…" value={query} onChange={(e) => setQuery(e.target.value)} /><div className="tableHeader playerTable"><span>Player</span><span>Week</span><span>Season</span><span>Status</span></div><div className="list">{filtered.map((p) => <button className="item clickable playerTable" key={p.player_id} onClick={() => onPlayer(p.player_id)}><span><strong>{nameOf(p)}</strong><span className="muted tiny">{p.position} · {p.team ?? "FA"}</span></span><strong>{weeklyProjection(p.player_id)?.toFixed(1) ?? "—"}</strong><strong>{seasonProjection(p.player_id)?.toFixed(0) ?? "—"}</strong><span className="pill">{rosteredIds.has(p.player_id) ? "ROSTERED" : "AVAILABLE"}</span></button>)}</div></section>;
 }
 
-function GuideView() { return <div className="grid guideGrid"><section className="card span12"><div className="eyebrow">ZERO-NFL-KNOWLEDGE GUIDE</div><h2>Only learn the things that change your fantasy decisions</h2><p className="muted">You do not need to understand formations, defensive schemes or most NFL rules to manage a fantasy team.</p></section><GuideCard title="WR — Wide Receiver" body="Catches passes. Usually one of your most important fantasy positions. Targets = how often the quarterback throws toward them." /><GuideCard title="RB — Running Back" body="Runs the ball and often catches short passes. Valuable because reliable high-volume RBs are scarce." /><GuideCard title="QB — Quarterback" body="Touches the ball constantly and scores lots of raw fantasy points, but in normal one-QB leagues there are many usable options, so you often do not need to draft one early." /><GuideCard title="TE — Tight End" body="A hybrid receiver/blocker. Fantasy production is top-heavy: a few are great, many are similar." /><GuideCard title="FLEX" body="A lineup slot that can usually hold RB/WR/TE. This is why depth at RB and WR matters." /><GuideCard title="Bye week" body="That NFL team does not play that week. The player scores zero, so move them out of your starting lineup." /><GuideCard title="Waivers" body="The pool of players nobody in your league currently owns. Injuries and role changes can suddenly make an unknown player very valuable." /><GuideCard title="Questionable / Doubtful / Out" body="Injury designations. Out means do not start them. Questionable means check closer to kickoff." /><GuideCard title="Projection" body="Estimated fantasy points. Useful, not guaranteed. A 1-point difference is basically a coin flip; 5+ points is much more meaningful." /></div>; }
+function LeagueView({ league, rosters, members, matchupData, transactions, players, myRoster, weeklyProjection, currentWeek }: any) {
+  return <div className="grid"><section className="card span5"><div className="eyebrow">YOUR LEAGUE</div><h2 className="sectionTitle">Format</h2><div className="list compact"><div className="item"><span>Teams</span><strong>{league.total_rosters}</strong></div><div className="item"><span>Scoring</span><strong>{formatScoring(scoringKey(league.scoring_settings))}</strong></div><div className="item"><span>Roster slots</span><strong>{league.roster_positions.length}</strong></div><div className="item"><span>Status</span><strong>{league.status}</strong></div></div></section><section className="card span7"><div className="eyebrow">WEEK {currentWeek} MATCHUPS</div><div className="list">{pairMatchups(matchupData).map((pair, i) => <div className={`matchup ${pair.some((m) => m.roster_id === myRoster?.roster_id) ? "myMatchup" : ""}`} key={i}>{pair.map((m) => { const roster = rosters.find((r: SleeperRoster) => r.roster_id === m.roster_id); return <div className="matchTeam" key={m.roster_id}><strong>{ownerName(roster, members)}{m.roster_id === myRoster?.roster_id ? " (You)" : ""}</strong><span>{m.points ?? 0} pts</span><span className="muted tiny">{sumProjected(roster?.starters ?? [], weeklyProjection)?.toFixed(1) ?? "—"} projected</span></div>; })}</div>)}</div>{!matchupData.length && <div className="empty">Matchups are not available yet.</div>}</section><section className="card span12"><div className="eyebrow">RECENT ACTIVITY</div><div className="list compact">{transactions.slice(0,20).map((t: SleeperTransaction) => <div className="item" key={t.transaction_id}><span><strong>{pretty(t.type)}</strong><span className="muted tiny">{transactionSummary(t, players)}</span></span><span className="pill">{t.status}</span></div>)}</div>{!transactions.length && <div className="empty">No league activity this week.</div>}</section></div>;
+}
+
+function DraftView({ activeDraft, realPicks, recommendations }: any) {
+  if (!activeDraft || activeDraft.status === "pre_draft") return <section className="card emptyState"><h2>Nothing you need to do here yet</h2><p>Come back to this tab on draft day. The site will show recommended available players once the Sleeper draft starts.</p></section>;
+  const top = recommendations[0];
+  return <div className="grid"><section className="card span12 pageIntro"><div><div className="eyebrow">DRAFT DAY ONLY</div><h2>{activeDraft.status === "drafting" ? "Your live draft helper" : "Draft complete"}</h2><p className="muted">During the live draft, refresh between picks and use the shortlist as a decision aid.</p></div></section>{activeDraft.status === "drafting" && <><section className="card span7 heroRecommendation"><div className="eyebrow">BEST AVAILABLE</div>{top ? <><h2>{nameOf(top.player)}</h2><p className="muted">{top.rating.position} · {top.player.team ?? "FA"} · score {top.rating.score}/100</p><p>{top.rating.reason}</p></> : <div className="empty">No recommendation loaded.</div>}</section><section className="card span5"><div className="eyebrow">NEXT OPTIONS</div><div className="list compact">{recommendations.slice(1,10).map((r: Recommendation,i:number) => <div className="item" key={r.player.player_id}><span><strong>#{i+2} {nameOf(r.player)}</strong><span className="muted tiny">{r.rating.position}</span></span><span className="score">{r.rating.score}</span></div>)}</div></section></>}<section className="card span12"><div className="eyebrow">RECENT PICKS</div><div className="list compact">{realPicks.slice(-15).reverse().map((p:SleeperDraftPick) => <div className="item" key={`${p.pick_no}-${p.player_id}`}><span><strong>#{p.pick_no} {p.metadata?.first_name} {p.metadata?.last_name}</strong><span className="muted tiny">{p.metadata?.position} · {p.metadata?.team}</span></span><span>R{p.round}</span></div>)}</div></section></div>;
+}
+
+function HelpView({ setTab }: { setTab: (tab: Tab) => void }) {
+  return <div className="pageStack"><section className="card helpHero"><div className="eyebrow">START HERE</div><h2>You can manage the whole season with the same simple routine</h2><p className="muted lead">Fantasy points come from how your players perform in real NFL games. Your job is mostly choosing starters, replacing weak/injured players, and occasionally evaluating trades.</p></section><section className="card"><div className="eyebrow">EVERY WEEK</div><div className="guideSteps"><GuideStep number="1" title="Early in the week: open Waivers" text="See if an available player is a clear improvement over your bench. You do not need to add someone just because they are trending." action="Open Waivers" onClick={() => setTab("waivers")} /><GuideStep number="2" title="After waivers: open Lineup" text="Use the recommended start/sit changes. A player on your bench can score points only if you move them into a starting slot in Sleeper." action="Open Lineup" onClick={() => setTab("lineup")} /><GuideStep number="3" title="Before games: check injury flags" text="Questionable means re-check. Out means bench them. The Home and Lineup pages surface these automatically." action="Open Home" onClick={() => setTab("home")} /><GuideStep number="4" title="If you get a trade offer: use Trades" text="Compare the players before accepting. Favor upgrades to your actual starting lineup, not tiny bench improvements." action="Open Trades" onClick={() => setTab("trades")} /><GuideStep number="5" title="Make the actual changes in Sleeper" text="This app is your decision dashboard. Sleeper is still where you submit lineup changes, waiver claims and trades." /></div></section><section className="grid"><GuideCard title="RB / Running Back" body="One of the key fantasy positions. Good RBs are valuable because reliable workload can be scarce." /><GuideCard title="WR / Wide Receiver" body="Another core position. Usually you start several WR/RB players, so depth here matters a lot." /><GuideCard title="QB / Quarterback" body="Scores lots of points, but in a normal one-QB league you usually do not need several of them." /><GuideCard title="FLEX" body="A lineup slot that can usually be filled by an RB, WR or TE. Think of it as one extra starter." /><GuideCard title="Waivers" body="Players currently not owned by anyone in your league. This is where surprise breakout players appear." /><GuideCard title="Projection" body="An estimate, not a promise. A 1-point difference is small; a 5+ point difference is much more meaningful." /><GuideCard title="Questionable" body="The player might still play. Check again closer to kickoff instead of immediately benching them." /><GuideCard title="Bye week" body="The player's NFL team does not play that week, so they cannot score fantasy points." /><GuideCard title="Trade" body="You exchange players with another manager. You do not need to trade unless it improves your team." /></section></div>;
+}
+
+function GuideStep({ number, title, text, action, onClick }: any) { return <div className="guideStep"><div className="stepNumber">{number}</div><div><h3>{title}</h3><p className="muted">{text}</p>{action && <button className="textButton" onClick={onClick}>{action} →</button>}</div></div>; }
 function GuideCard({ title, body }: { title: string; body: string }) { return <section className="card span4"><h3>{title}</h3><p className="muted">{body}</p></section>; }
-function PlayerDrawer({ player, rostered, weekly, season, onClose }: { player: SleeperPlayer; rostered: boolean; weekly?: number; season?: number; onClose: () => void }) { return <div className="drawerBackdrop" onClick={onClose}><aside className="drawer" onClick={(e) => e.stopPropagation()}><button className="closeButton" onClick={onClose}>×</button><div className="eyebrow">PLAYER DETAILS</div><h2>{nameOf(player)}</h2><div className="muted">{player.position} · {player.team ?? "Free agent"} · Age {player.age ?? "?"}</div><div className="drawerStats"><div><span>Week projection</span><strong>{weekly?.toFixed(1) ?? "—"}</strong></div><div><span>Season projection</span><strong>{season?.toFixed(1) ?? "—"}</strong></div><div><span>League status</span><strong>{rostered ? "Rostered" : "Available"}</strong></div><div><span>Health</span><strong>{player.injury_status ?? "No flag"}</strong></div></div><h3>Plain English</h3><p className="muted">{plainEnglish(player, weekly)}</p>{player.injury_notes && <div className="action warn"><strong>Injury note</strong><div className="muted">{player.injury_notes}</div></div>}</aside></div>; }
-function eligibleForSlot(player: SleeperPlayer, slot: string) { const pos = playerPosition(player); if (!pos) return false; if (slot === pos) return true; if (slot === "FLEX") return ["RB", "WR", "TE"].includes(pos); if (slot === "SUPER_FLEX") return ["QB", "RB", "WR", "TE"].includes(pos); if (slot === "REC_FLEX") return ["WR", "TE"].includes(pos); return false; }
-function sumProjected(ids: string[], getProjection: (id: string) => number | undefined) { const values = ids.map(getProjection).filter((x): x is number => typeof x === "number"); if (!values.length) return undefined; return values.reduce((sum, value) => sum + value, 0); }
-function pairMatchups(rows: SleeperMatchup[]) { const groups = new Map<number, SleeperMatchup[]>(); rows.forEach((m) => { if (m.matchup_id != null) groups.set(m.matchup_id, [...(groups.get(m.matchup_id) ?? []), m]); }); return Array.from(groups.values()); }
-function transactionSummary(t: SleeperTransaction, players: PlayerMap) { const adds = Object.keys(t.adds ?? {}).map((id) => nameOf(players[id])); const drops = Object.keys(t.drops ?? {}).map((id) => nameOf(players[id])); if (t.type === "trade") return `Between roster${t.roster_ids.length > 1 ? "s" : ""} ${t.roster_ids.join(" & ")}`; if (adds.length && drops.length) return `Added ${adds.join(", ")} · dropped ${drops.join(", ")}`; if (adds.length) return `Added ${adds.join(", ")}`; if (drops.length) return `Dropped ${drops.join(", ")}`; return `Roster ${t.roster_ids.join(", ")}`; }
-function plainEnglish(player: SleeperPlayer, weekly?: number) { const pos = playerPosition(player); if (player.injury_status === "Out") return "Do not start this player while they are ruled out."; if (player.injury_status) return "There is an injury flag. Re-check their status close to kickoff before relying on them."; if (weekly != null && weekly >= 18) return `A strong weekly projection for a ${pos ?? "player"}. Usually someone you want in the lineup unless your alternatives are elite.`; if (weekly != null && weekly >= 12) return `A usable weekly option. Compare them against your other ${pos ?? "same-position"} choices before kickoff.`; return "No major warning detected. Use projection, roster need and availability rather than name recognition."; }
+
+function PlayerDrawer({ player, rostered, weekly, season, onClose }: { player: SleeperPlayer; rostered: boolean; weekly?: number; season?: number; onClose: () => void }) {
+  return <div className="drawerBackdrop" onClick={onClose}><aside className="drawer" onClick={(e) => e.stopPropagation()}><button className="closeButton" onClick={onClose}>×</button><div className="eyebrow">PLAYER</div><h2>{nameOf(player)}</h2><div className="muted">{player.position} · {player.team ?? "Free agent"} · Age {player.age ?? "?"}</div><div className="drawerStats"><div><span>This week</span><strong>{weekly?.toFixed(1) ?? "—"}</strong></div><div><span>Season</span><strong>{season?.toFixed(1) ?? "—"}</strong></div><div><span>League status</span><strong>{rostered ? "Rostered" : "Available"}</strong></div><div><span>Health</span><strong>{player.injury_status ?? "No flag"}</strong></div></div><h3>What this means</h3><p className="muted">{plainEnglish(player, weekly)}</p></aside></div>;
+}
+
+function eligibleForSlot(player: SleeperPlayer, slot: string) { const pos = playerPosition(player); if (!pos) return false; if (slot === pos) return true; if (slot === "FLEX") return ["RB","WR","TE"].includes(pos); if (slot === "SUPER_FLEX") return ["QB","RB","WR","TE"].includes(pos); if (slot === "REC_FLEX") return ["WR","TE"].includes(pos); return false; }
+function sumProjected(ids: string[], fn: (id: string) => number | undefined) { const vals = ids.map(fn).filter((x): x is number => typeof x === "number"); return vals.length ? vals.reduce((a,b) => a+b,0) : undefined; }
+function pairMatchups(rows: SleeperMatchup[]) { const groups = new Map<number,SleeperMatchup[]>(); rows.forEach((m) => { if (m.matchup_id != null) groups.set(m.matchup_id,[...(groups.get(m.matchup_id) ?? []),m]); }); return Array.from(groups.values()); }
+function ownerName(roster: SleeperRoster | undefined, members: SleeperLeagueUser[]) { if (!roster?.owner_id) return `Roster ${roster?.roster_id ?? "?"}`; const m = members.find((u) => u.user_id === roster.owner_id); return m?.metadata?.team_name || m?.display_name || `Roster ${roster.roster_id}`; }
+function transactionSummary(t: SleeperTransaction, players: PlayerMap) { const adds = Object.keys(t.adds ?? {}).map((id) => nameOf(players[id])); const drops = Object.keys(t.drops ?? {}).map((id) => nameOf(players[id])); if (adds.length && drops.length) return `Added ${adds.join(", ")} · dropped ${drops.join(", ")}`; if (adds.length) return `Added ${adds.join(", ")}`; if (drops.length) return `Dropped ${drops.join(", ")}`; return `Roster${t.roster_ids.length > 1 ? "s" : ""} ${t.roster_ids.join(", ")}`; }
+function tradeValue(player: SleeperPlayer, season?: number) { const pos = playerPosition(player); const base = pos === "RB" ? 18 : pos === "WR" ? 17 : pos === "TE" ? 12 : 10; const projection = season != null ? Math.min(70, season / 5) : 28; const health = player.injury_status === "Out" ? -12 : player.injury_status ? -5 : 0; const age = player.age && player.age > 30 ? -(player.age - 30) * 2 : 0; return Math.max(1, Math.round(base + projection + health + age)); }
+function plainEnglish(player: SleeperPlayer, weekly?: number) { if (player.injury_status === "Out") return "Do not start this player while they are ruled out."; if (player.injury_status) return "There is an injury flag. Re-check their status close to kickoff."; if (weekly != null && weekly >= 18) return "A strong weekly projection. Usually a player you want in your lineup."; if (weekly != null && weekly >= 12) return "A usable weekly option. Compare them with your other choices at the same position."; return "No major warning. Use projections and roster need rather than name recognition."; }
 function formatScoring(key: string) { if (key === "ppr") return "Full PPR"; if (key === "half_ppr") return "Half PPR"; return "Standard"; }
-function tabLabel(tab: Tab) { const labels: Record<Tab, string> = { dashboard: "Dashboard", draft: "Draft", lineup: "Lineup", waivers: "Waivers", players: "Players", league: "League", guide: "NFL 101" }; return labels[tab]; }
+function tabLabel(tab: Tab) { const labels: Record<Tab,string> = { home:"Home", draft:"Draft", lineup:"Lineup", waivers:"Waivers", trades:"Trades", players:"Players", league:"League", help:"How to use" }; return labels[tab]; }
 function nameOf(p?: SleeperPlayer) { return p?.full_name || `${p?.first_name ?? "Unknown"} ${p?.last_name ?? "player"}`.trim(); }
-function pretty(s: string) { return s.replace(/_/g, " ").replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase()); }
+function pretty(s: string) { return s.replace(/_/g," ").replace(/([A-Z])/g," $1").replace(/^./,(c) => c.toUpperCase()); }

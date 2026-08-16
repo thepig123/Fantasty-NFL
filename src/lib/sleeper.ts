@@ -1,6 +1,13 @@
 export const SLEEPER_BASE = "https://api.sleeper.app/v1";
 
 export type SleeperUser = { user_id: string; username: string; display_name: string; avatar?: string };
+export type SleeperLeagueUser = {
+  user_id: string;
+  username?: string;
+  display_name: string;
+  avatar?: string;
+  metadata?: { team_name?: string };
+};
 export type SleeperLeague = {
   league_id: string;
   name: string;
@@ -16,8 +23,6 @@ export type SleeperRoster = {
   owner_id: string | null;
   players: string[] | null;
   starters: string[] | null;
-  reserve?: string[] | null;
-  taxi?: string[] | null;
   settings: Record<string, number>;
 };
 export type SleeperDraft = {
@@ -49,39 +54,26 @@ export type SleeperPlayer = {
   injury_body_part?: string | null;
   injury_notes?: string | null;
   practice_participation?: string | null;
-  depth_chart_position?: number | null;
   years_exp?: number;
   age?: number;
-  number?: number | null;
-  college?: string | null;
 };
+export type NflState = { week: number; display_week: number; season: string; season_type: string };
 export type SleeperMatchup = {
   roster_id: number;
   matchup_id: number | null;
-  points: number;
-  custom_points?: number | null;
-  starters: string[];
-  players: string[];
-  starters_points?: number[];
+  points?: number;
+  players?: string[];
+  starters?: string[];
 };
 export type SleeperTransaction = {
   transaction_id: string;
-  type: "waiver" | "free_agent" | "trade" | string;
+  type: string;
   status: string;
   roster_ids: number[];
   adds?: Record<string, number> | null;
   drops?: Record<string, number> | null;
-  waiver_budget?: Array<{ sender: number; receiver: number; amount: number }>;
-  created?: number;
-};
-export type NflState = {
-  week: number;
-  display_week: number;
-  season: string;
-  season_type: string;
-  leg: number;
-  league_season?: string;
-  previous_season?: string;
+  draft_picks?: unknown[];
+  waiver_budget?: unknown[];
 };
 
 async function get<T>(path: string): Promise<T> {
@@ -93,6 +85,7 @@ async function get<T>(path: string): Promise<T> {
 export const sleeper = {
   user: (username: string) => get<SleeperUser>(`/user/${encodeURIComponent(username)}`),
   leagues: (userId: string, season = "2026") => get<SleeperLeague[]>(`/user/${userId}/leagues/nfl/${season}`),
+  users: (leagueId: string) => get<SleeperLeagueUser[]>(`/league/${leagueId}/users`),
   rosters: (leagueId: string) => get<SleeperRoster[]>(`/league/${leagueId}/rosters`),
   drafts: (leagueId: string) => get<SleeperDraft[]>(`/league/${leagueId}/drafts`),
   picks: (draftId: string) => get<SleeperDraftPick[]>(`/draft/${draftId}/picks`),

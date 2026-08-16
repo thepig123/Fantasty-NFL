@@ -16,6 +16,8 @@ export type SleeperRoster = {
   owner_id: string | null;
   players: string[] | null;
   starters: string[] | null;
+  reserve?: string[] | null;
+  taxi?: string[] | null;
   settings: Record<string, number>;
 };
 export type SleeperDraft = {
@@ -44,8 +46,42 @@ export type SleeperPlayer = {
   team?: string | null;
   status?: string;
   injury_status?: string | null;
+  injury_body_part?: string | null;
+  injury_notes?: string | null;
+  practice_participation?: string | null;
+  depth_chart_position?: number | null;
   years_exp?: number;
   age?: number;
+  number?: number | null;
+  college?: string | null;
+};
+export type SleeperMatchup = {
+  roster_id: number;
+  matchup_id: number | null;
+  points: number;
+  custom_points?: number | null;
+  starters: string[];
+  players: string[];
+  starters_points?: number[];
+};
+export type SleeperTransaction = {
+  transaction_id: string;
+  type: "waiver" | "free_agent" | "trade" | string;
+  status: string;
+  roster_ids: number[];
+  adds?: Record<string, number> | null;
+  drops?: Record<string, number> | null;
+  waiver_budget?: Array<{ sender: number; receiver: number; amount: number }>;
+  created?: number;
+};
+export type NflState = {
+  week: number;
+  display_week: number;
+  season: string;
+  season_type: string;
+  leg: number;
+  league_season?: string;
+  previous_season?: string;
 };
 
 async function get<T>(path: string): Promise<T> {
@@ -60,5 +96,8 @@ export const sleeper = {
   rosters: (leagueId: string) => get<SleeperRoster[]>(`/league/${leagueId}/rosters`),
   drafts: (leagueId: string) => get<SleeperDraft[]>(`/league/${leagueId}/drafts`),
   picks: (draftId: string) => get<SleeperDraftPick[]>(`/draft/${draftId}/picks`),
+  matchups: (leagueId: string, week: number) => get<SleeperMatchup[]>(`/league/${leagueId}/matchups/${week}`),
+  transactions: (leagueId: string, week: number) => get<SleeperTransaction[]>(`/league/${leagueId}/transactions/${week}`),
+  state: () => get<NflState>(`/state/nfl`),
   trending: (type: "add" | "drop" = "add") => get<Array<{ player_id: string; count: number }>>(`/players/nfl/trending/${type}?lookback_hours=24&limit=100`),
 };

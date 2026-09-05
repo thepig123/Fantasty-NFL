@@ -29,7 +29,7 @@ function normalizeProjectionRows(payload: unknown) {
 }
 
 async function fetchSleeperProjection(url: string) {
-  const response = await fetch(url, { next: { revalidate: 1800 } });
+  const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) return {};
   return normalizeProjectionRows(await response.json());
 }
@@ -49,6 +49,6 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json(
     { weekly, season: seasonLong, seasonNumber: season, weekNumber: Number(week), source: "Sleeper projection feed when available" },
-    { headers: { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=3600" } },
+    { headers: { "Cache-Control": "no-store" } },
   );
 }

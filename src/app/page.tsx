@@ -285,6 +285,8 @@ function LeagueView({ league, rosters, members, matchupData, transactions, playe
 }
 
 function DraftView({ activeDraft, realPicks, recommendations }: any) {
+  const [positionFilter, setPositionFilter] = useState<"ALL" | "QB" | "RB" | "WR" | "TE">("ALL");
+
   if (!activeDraft || activeDraft.status === "pre_draft") return <section className="card emptyState"><h2>Nothing you need to do here yet</h2><p>Come back to this tab on draft day. The site will show recommended available players once the Sleeper draft starts.</p></section>;
 
   const positionOrder = ["QB", "RB", "WR", "TE"];
@@ -294,8 +296,27 @@ function DraftView({ activeDraft, realPicks, recommendations }: any) {
     .sort((a, b) => b.rating.score - a.rating.score || (b.seasonProjection ?? 0) - (a.seasonProjection ?? 0));
   const top = positionLeaders[0] ?? recommendations[0];
   const alternatives = positionLeaders.filter((r) => r.player.player_id !== top?.player.player_id);
+  const nextOverall = recommendations.filter((r: Recommendation) => r.player.player_id !== top?.player.player_id).slice(0, 10);
+  const filteredOptions = positionFilter === "ALL"
+    ? nextOverall
+    : recommendations.filter((r: Recommendation) => r.rating.position === positionFilter).slice(0, 10);
 
-  return <div className="grid"><section className="card span12 pageIntro"><div><div className="eyebrow">DRAFT DAY ONLY</div><h2>{activeDraft.status === "drafting" ? "Your live draft helper" : "Draft complete"}</h2><p className="muted">Live picks sync automatically. The shortlist now compares the best available option at each position so one position cannot flood the board.</p></div></section>{activeDraft.status === "drafting" && <><section className="card span7 heroRecommendation"><div className="eyebrow">BEST PICK RIGHT NOW</div>{top ? <><h2>{nameOf(top.player)}</h2><p className="muted">{top.rating.position} · {top.player.team ?? "FA"} · score {top.rating.score}/100</p><p>{top.rating.reason}</p></> : <div className="empty">No recommendation loaded.</div>}</section><section className="card span5"><div className="eyebrow">BEST BY POSITION</div><div className="list compact">{alternatives.map((r: Recommendation) => <div className="item" key={r.player.player_id}><span><strong>{r.rating.position}: {nameOf(r.player)}</strong><span className="muted tiny">{r.player.team ?? "FA"}{r.seasonProjection != null ? ` · ${r.seasonProjection.toFixed(0)} season projection` : ""}</span></span><span className="score">{r.rating.score}</span></div>)}</div>{!alternatives.length && <div className="empty">No other position leaders available.</div>}</section></>}<section className="card span12"><div className="eyebrow">RECENT PICKS</div><div className="list compact">{realPicks.slice(-15).reverse().map((p:SleeperDraftPick) => <div className="item" key={`${p.pick_no}-${p.player_id}`}><span><strong>#{p.pick_no} {p.metadata?.first_name} {p.metadata?.last_name}</strong><span className="muted tiny">{p.metadata?.position} · {p.metadata?.team}</span></span><span>R{p.round}</span></div>)}</div></section></div>;
+  return <div className="grid">
+    <section className="card span12 pageIntro"><div><div className="eyebrow">DRAFT DAY ONLY</div><h2>{activeDraft.status === "drafting" ? "Your live draft helper" : "Draft complete"}</h2><p className="muted">Live picks sync automatically. Use the overall ranking for your default choice, or filter by position when you want to inspect a specific role.</p></div></section>
+    {activeDraft.status === "drafting" && <>
+      <section className="card span7 heroRecommendation"><div className="eyebrow">BEST PICK RIGHT NOW</div>{top ? <><h2>{nameOf(top.player)}</h2><p className="muted">{top.rating.position} · {top.player.team ?? "FA"} · score {top.rating.score}/100</p><p>{top.rating.reason}</p></> : <div className="empty">No recommendation loaded.</div>}</section>
+      <section className="card span5"><div className="eyebrow">BEST BY POSITION</div><div className="list compact">{alternatives.map((r: Recommendation) => <div className="item" key={r.player.player_id}><span><strong>{r.rating.position}: {nameOf(r.player)}</strong><span className="muted tiny">{r.player.team ?? "FA"}{r.seasonProjection != null ? ` · ${r.seasonProjection.toFixed(0)} season projection` : ""}</span></span><span className="score">{r.rating.score}</span></div>)}</div>{!alternatives.length && <div className="empty">No other position leaders available.</div>}</section>
+      <section className="card span12">
+        <div className="eyebrow">{positionFilter === "ALL" ? "NEXT 10 BEST PICKS" : `BEST ${positionFilter} OPTIONS`}</div>
+        <div className="row" style={{ margin: "12px 0 16px", flexWrap: "wrap" }}>
+          {(["ALL", "QB", "RB", "WR", "TE"] as const).map((position) => <button key={position} className={positionFilter === position ? "btn" : "btn ghost"} aria-pressed={positionFilter === position} onClick={() => setPositionFilter(position)}>{position}</button>)}
+        </div>
+        <div className="list compact">{filteredOptions.map((r: Recommendation, i: number) => <div className="item" key={r.player.player_id}><span><strong>#{i + 1} {nameOf(r.player)}</strong><span className="muted tiny">{r.rating.position} · {r.player.team ?? "FA"}{r.seasonProjection != null ? ` · ${r.seasonProjection.toFixed(0)} season projection` : ""}</span></span><span className="score">{r.rating.score}</span></div>)}</div>
+        {!filteredOptions.length && <div className="empty">No available {positionFilter === "ALL" ? "players" : positionFilter + "s"} are currently ranked.</div>}
+      </section>
+    </>}
+    <section className="card span12"><div className="eyebrow">RECENT PICKS</div><div className="list compact">{realPicks.slice(-15).reverse().map((p:SleeperDraftPick) => <div className="item" key={`${p.pick_no}-${p.player_id}`}><span><strong>#{p.pick_no} {p.metadata?.first_name} {p.metadata?.last_name}</strong><span className="muted tiny">{p.metadata?.position} · {p.metadata?.team}</span></span><span>R{p.round}</span></div>)}</div></section>
+  </div>;
 }
 
 function HelpView({ setTab }: { setTab: (tab: Tab) => void }) {

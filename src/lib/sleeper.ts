@@ -50,6 +50,7 @@ export type SleeperPlayer = {
   fantasy_positions?: string[];
   team?: string | null;
   status?: string;
+  active?: boolean;
   injury_status?: string | null;
   injury_body_part?: string | null;
   injury_notes?: string | null;

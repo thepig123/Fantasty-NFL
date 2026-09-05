@@ -2,7 +2,7 @@ import type { SleeperPlayer } from "./sleeper";
 
 export type Position = "QB" | "RB" | "WR" | "TE";
 
-const positionBase: Record<Position, number> = { RB: 94, WR: 92, TE: 72, QB: 68 };
+const positionBase: Record<Position, number> = { RB: 90, WR: 90, TE: 76, QB: 76 };
 
 export function playerPosition(player: SleeperPlayer): Position | undefined {
   const position = (player.fantasy_positions?.[0] ?? player.position) as Position | undefined;
@@ -18,41 +18,63 @@ function draftStrategyAdjustment(
   const requiredQbs = rosterPositions.filter((p) => p === "QB").length;
   const hasSuperflex = rosterPositions.includes("SUPER_FLEX") || requiredQbs >= 2;
   const owned = rosteredPositions.filter((p) => p === position).length;
+  const qbOwned = rosteredPositions.filter((p) => p === "QB").length;
+  const teOwned = rosteredPositions.filter((p) => p === "TE").length;
+  const rbOwned = rosteredPositions.filter((p) => p === "RB").length;
+  const wrOwned = rosteredPositions.filter((p) => p === "WR").length;
 
   if (hasSuperflex) {
     if (position === "QB") {
-      if (pickNumberForYou <= 2) return 18;
-      if (pickNumberForYou <= 5 && owned === 0) return 12;
-      if (owned >= 2) return -18;
-      return 5;
+      if (pickNumberForYou <= 2) return 20;
+      if (pickNumberForYou <= 5 && owned === 0) return 16;
+      if (owned >= 2) return -14;
+      return 8;
     }
-    return position === "RB" || position === "WR" ? 3 : 0;
+    if (position === "RB" && rbOwned >= 4) return -12;
+    if (position === "WR" && wrOwned >= 5) return -10;
+    return position === "RB" || position === "WR" ? 2 : 0;
   }
 
-  // Normal one-QB redraft strategy: RB/WR carry more opportunity-cost value early.
+  // Normal one-QB redraft: avoid paying the QB premium too early,
+  // but do not let the model ignore QB/TE forever either.
   if (position === "QB") {
-    if (owned >= 1 && pickNumberForYou <= 10) return -30;
-    if (pickNumberForYou === 1) return -28;
-    if (pickNumberForYou === 2) return -22;
-    if (pickNumberForYou === 3) return -14;
+    if (qbOwned >= 1 && pickNumberForYou <= 10) return -35;
+    if (pickNumberForYou === 1) return -30;
+    if (pickNumberForYou === 2) return -24;
+    if (pickNumberForYou === 3) return -16;
     if (pickNumberForYou === 4) return -8;
-    if (pickNumberForYou >= 5 && pickNumberForYou <= 7 && owned === 0) return 4;
-    if (pickNumberForYou >= 8 && owned === 0) return 10;
-    return -4;
+    if (qbOwned === 0 && pickNumberForYou === 5) return 8;
+    if (qbOwned === 0 && pickNumberForYou === 6) return 14;
+    if (qbOwned === 0 && pickNumberForYou >= 7) return 24;
+    return -5;
   }
 
   if (position === "TE") {
-    if (owned >= 1 && pickNumberForYou <= 9) return -24;
-    if (pickNumberForYou === 1) return -10;
-    if (pickNumberForYou === 2) return -6;
+    if (teOwned >= 1 && pickNumberForYou <= 9) return -28;
+    if (pickNumberForYou === 1) return -12;
+    if (pickNumberForYou === 2) return -7;
+    if (teOwned === 0 && pickNumberForYou >= 6) return 12;
+    if (teOwned === 0 && pickNumberForYou >= 8) return 20;
     return 0;
   }
 
-  if (position === "RB" || position === "WR") {
-    if (pickNumberForYou === 1) return 8;
-    if (pickNumberForYou === 2) return 6;
+  // Depth is useful, but every extra RB/WR should have diminishing value.
+  if (position === "RB") {
+    if (rbOwned >= 5) return -25;
+    if (rbOwned >= 4) return -18;
+    if (rbOwned >= 3) return -10;
+    if (pickNumberForYou <= 2) return 7;
     if (pickNumberForYou <= 4) return 4;
-    return 1;
+    return 0;
+  }
+
+  if (position === "WR") {
+    if (wrOwned >= 6) return -24;
+    if (wrOwned >= 5) return -16;
+    if (wrOwned >= 4) return -8;
+    if (pickNumberForYou <= 2) return 7;
+    if (pickNumberForYou <= 4) return 4;
+    return 0;
   }
 
   return 0;
@@ -69,25 +91,29 @@ export function draftScore(
   if (!position) return null;
 
   const required = rosterPositions.filter((p) => p === position).length;
-  const flexSlots = rosterPositions.filter((p) => p.includes("FLEX")).length;
+  const flexSlots = rosterPositions.filter((p) => p.includes("FLEX") && p !== "SUPER_FLEX").length;
   const owned = rosteredPositions.filter((p) => p === position).length;
-  const targetDepth = required + ((position === "RB" || position === "WR") ? Math.max(1, flexSlots) : 0);
-  const need = targetDepth > owned ? 100 : Math.max(25, 78 - (owned - targetDepth + 1) * 16);
-  const scarcity = position === "RB" ? 92 : position === "WR" ? 88 : position === "TE" ? 68 : 52;
+
+  // FLEX demand is shared between RB/WR/TE. Do not give every FLEX slot to both RB and WR.
+  const sharedFlexDepth = Math.ceil(flexSlots / 2);
+  const targetDepth = required + ((position === "RB" || position === "WR") ? Math.max(1, sharedFlexDepth) : 0);
+  const need = targetDepth > owned ? 100 : Math.max(18, 72 - (owned - targetDepth + 1) * 18);
+
+  const scarcity = position === "RB" ? 88 : position === "WR" ? 86 : position === "TE" ? 72 : 66;
   const experience = player.years_exp ?? 0;
   const agePenalty = player.age && player.age > 30 ? Math.min(20, (player.age - 30) * 3) : 0;
   const baseValue = Math.max(30, positionBase[position] - agePenalty + Math.min(5, experience));
   const projectionValue = projectionPercentile != null ? Math.max(0, Math.min(100, projectionPercentile)) : baseValue;
-  const availabilityPressure = position === "RB" || position === "WR" ? 86 : position === "TE" ? 62 : 48;
+  const availabilityPressure = position === "RB" ? 82 : position === "WR" ? 80 : position === "TE" ? 68 : 66;
   const health = player.injury_status ? 58 : 90;
   const strategy = draftStrategyAdjustment(position, rosterPositions, rosteredPositions);
   const rawScore =
-    projectionValue * 0.36 +
-    need * 0.24 +
-    scarcity * 0.16 +
-    availabilityPressure * 0.12 +
+    projectionValue * 0.38 +
+    need * 0.22 +
+    scarcity * 0.14 +
+    availabilityPressure * 0.10 +
     health * 0.08 +
-    75 * 0.04 +
+    75 * 0.08 +
     strategy;
   const score = Math.max(1, Math.min(100, Math.round(rawScore)));
   const pickNumberForYou = rosteredPositions.length + 1;
@@ -95,15 +121,21 @@ export function draftScore(
 
   let reason: string;
   if (!hasSuperflex && position === "QB" && pickNumberForYou <= 4) {
-    reason = `Strong player, but QB is intentionally de-prioritized this early in a one-QB league. RB/WR usually gives better value here.`;
+    reason = "Good player, but QB is intentionally de-prioritized this early in a one-QB league.";
+  } else if (!hasSuperflex && position === "QB" && owned === 0 && pickNumberForYou >= 6) {
+    reason = "You still do not have a QB, so this position is becoming a real roster priority now.";
+  } else if (position === "TE" && owned === 0 && pickNumberForYou >= 6) {
+    reason = "You still need your first TE, so the model is now giving the position extra weight.";
   } else if (hasSuperflex && position === "QB" && pickNumberForYou <= 5) {
-    reason = `Your league allows extra QB value (Superflex/2QB), so quarterbacks are correctly treated as early-round priorities.`;
+    reason = "Your league is Superflex/2QB, so quarterbacks correctly carry early-round value.";
+  } else if ((position === "RB" && owned >= 3) || (position === "WR" && owned >= 4)) {
+    reason = `You already have ${owned} ${position}s. This player must be strong value to justify adding more depth here.`;
   } else if (need >= 90) {
-    reason = `You still need ${position} depth${position === "RB" || position === "WR" ? " at a priority fantasy position" : ""}.`;
+    reason = `You still have a meaningful ${position} roster need.`;
   } else if (projectionPercentile != null && projectionPercentile >= 85) {
     reason = `Strong projected value even though ${position} is not your biggest roster need.`;
   } else {
-    reason = `Useful ${position} depth, but you are not forced into this position right now.`;
+    reason = `Useful ${position} option, but you are not forced into this position.`;
   }
 
   return {

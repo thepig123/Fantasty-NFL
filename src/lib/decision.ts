@@ -35,7 +35,6 @@ function draftStrategyAdjustment(
     return position === "RB" || position === "WR" ? 2 : 0;
   }
 
-  // Normal one-QB redraft: delay QB early, but make the first QB a priority in the middle rounds.
   if (position === "QB") {
     if (qbOwned >= 1 && pickNumberForYou <= 10) return -40;
     if (pickNumberForYou === 1) return -30;
@@ -58,7 +57,6 @@ function draftStrategyAdjustment(
     return 0;
   }
 
-  // Once you have a usable core, stop flooding the board with the same position.
   if (position === "RB") {
     if (rbOwned >= 5) return -50;
     if (rbOwned >= 4) return -42;
@@ -90,21 +88,22 @@ export function draftScore(
   const position = playerPosition(player);
   if (!position) return null;
 
+  // Draft recommendations must be real, current NFL options. The Sleeper master
+  // player dataset contains historical/free-agent records, and missing projection
+  // data must never fall back to a generic high positional score.
+  if (!player.team || player.active === false || seasonProjection == null || projectionPercentile == null) return null;
+
   const required = rosterPositions.filter((p) => p === position).length;
   const flexSlots = rosterPositions.filter((p) => p.includes("FLEX") && p !== "SUPER_FLEX").length;
   const owned = rosteredPositions.filter((p) => p === position).length;
 
-  // FLEX demand is shared. Do not let both RB and WR independently claim every FLEX spot.
   const sharedFlexDepth = Math.ceil(flexSlots / 2);
   const targetDepth = required + ((position === "RB" || position === "WR") ? Math.max(1, sharedFlexDepth) : 0);
   const need = targetDepth > owned ? 100 : Math.max(12, 68 - (owned - targetDepth + 1) * 20);
 
   const scarcity = position === "RB" ? 82 : position === "WR" ? 84 : position === "TE" ? 76 : 72;
-  const experience = player.years_exp ?? 0;
-  const agePenalty = player.age && player.age > 30 ? Math.min(20, (player.age - 30) * 3) : 0;
-  const baseValue = Math.max(30, positionBase[position] - agePenalty + Math.min(5, experience));
-  const projectionValue = projectionPercentile != null ? Math.max(0, Math.min(100, projectionPercentile)) : baseValue;
   const availabilityPressure = position === "RB" ? 74 : position === "WR" ? 76 : position === "TE" ? 72 : 72;
+  const projectionValue = Math.max(0, Math.min(100, projectionPercentile));
   const health = player.injury_status ? 58 : 90;
   const strategy = draftStrategyAdjustment(position, rosterPositions, rosteredPositions);
   const rawScore =
@@ -132,7 +131,7 @@ export function draftScore(
     reason = `You already have ${owned} ${position}s. Another one is heavily de-prioritized unless the value is exceptional.`;
   } else if (need >= 90) {
     reason = `You still have a meaningful ${position} roster need.`;
-  } else if (projectionPercentile != null && projectionPercentile >= 85) {
+  } else if (projectionPercentile >= 85) {
     reason = `Strong projected value even though ${position} is not your biggest roster need.`;
   } else {
     reason = `Useful ${position} option, but you are not forced into this position.`;

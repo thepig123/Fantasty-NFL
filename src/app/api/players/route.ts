@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { SLEEPER_BASE } from "@/lib/sleeper";
 
-export const revalidate = 86400;
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   const response = await fetch(`${SLEEPER_BASE}/players/nfl`, {
-    next: { revalidate: 86400 },
+    cache: "no-store",
   });
 
   if (!response.ok) {
@@ -14,6 +14,6 @@ export async function GET() {
 
   const data = await response.json();
   return NextResponse.json(data, {
-    headers: { "Cache-Control": "public, s-maxage=86400, stale-while-revalidate=86400" },
+    headers: { "Cache-Control": "no-store" },
   });
 }

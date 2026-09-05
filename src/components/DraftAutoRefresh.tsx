@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 
-const POLL_MS = 5000;
+const POLL_MS = 3000;
 
 function draftTabIsActive() {
   return Array.from(document.querySelectorAll(".nav button")).some(
@@ -20,11 +20,13 @@ function clickRefreshButton() {
 
 export default function DraftAutoRefresh() {
   useEffect(() => {
-    const interval = window.setInterval(() => {
-      if (document.visibilityState !== "visible") return;
+    const refresh = () => {
       if (!draftTabIsActive()) return;
       clickRefreshButton();
-    }, POLL_MS);
+    };
+
+    refresh();
+    const interval = window.setInterval(refresh, POLL_MS);
 
     return () => window.clearInterval(interval);
   }, []);

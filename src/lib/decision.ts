@@ -9,6 +9,55 @@ export function playerPosition(player: SleeperPlayer): Position | undefined {
   return position && position in positionBase ? position : undefined;
 }
 
+function draftStrategyAdjustment(
+  position: Position,
+  rosterPositions: string[],
+  rosteredPositions: string[],
+) {
+  const pickNumberForYou = rosteredPositions.length + 1;
+  const requiredQbs = rosterPositions.filter((p) => p === "QB").length;
+  const hasSuperflex = rosterPositions.includes("SUPER_FLEX") || requiredQbs >= 2;
+  const owned = rosteredPositions.filter((p) => p === position).length;
+
+  if (hasSuperflex) {
+    if (position === "QB") {
+      if (pickNumberForYou <= 2) return 18;
+      if (pickNumberForYou <= 5 && owned === 0) return 12;
+      if (owned >= 2) return -18;
+      return 5;
+    }
+    return position === "RB" || position === "WR" ? 3 : 0;
+  }
+
+  // Normal one-QB redraft strategy: RB/WR carry more opportunity-cost value early.
+  if (position === "QB") {
+    if (owned >= 1 && pickNumberForYou <= 10) return -30;
+    if (pickNumberForYou === 1) return -28;
+    if (pickNumberForYou === 2) return -22;
+    if (pickNumberForYou === 3) return -14;
+    if (pickNumberForYou === 4) return -8;
+    if (pickNumberForYou >= 5 && pickNumberForYou <= 7 && owned === 0) return 4;
+    if (pickNumberForYou >= 8 && owned === 0) return 10;
+    return -4;
+  }
+
+  if (position === "TE") {
+    if (owned >= 1 && pickNumberForYou <= 9) return -24;
+    if (pickNumberForYou === 1) return -10;
+    if (pickNumberForYou === 2) return -6;
+    return 0;
+  }
+
+  if (position === "RB" || position === "WR") {
+    if (pickNumberForYou === 1) return 8;
+    if (pickNumberForYou === 2) return 6;
+    if (pickNumberForYou <= 4) return 4;
+    return 1;
+  }
+
+  return 0;
+}
+
 export function draftScore(
   player: SleeperPlayer,
   rosterPositions: string[],
@@ -31,14 +80,31 @@ export function draftScore(
   const projectionValue = projectionPercentile != null ? Math.max(0, Math.min(100, projectionPercentile)) : baseValue;
   const availabilityPressure = position === "RB" || position === "WR" ? 86 : position === "TE" ? 62 : 48;
   const health = player.injury_status ? 58 : 90;
-  const score = Math.round(
+  const strategy = draftStrategyAdjustment(position, rosterPositions, rosteredPositions);
+  const rawScore =
     projectionValue * 0.36 +
     need * 0.24 +
     scarcity * 0.16 +
     availabilityPressure * 0.12 +
     health * 0.08 +
-    75 * 0.04,
-  );
+    75 * 0.04 +
+    strategy;
+  const score = Math.max(1, Math.min(100, Math.round(rawScore)));
+  const pickNumberForYou = rosteredPositions.length + 1;
+  const hasSuperflex = rosterPositions.includes("SUPER_FLEX") || rosterPositions.filter((p) => p === "QB").length >= 2;
+
+  let reason: string;
+  if (!hasSuperflex && position === "QB" && pickNumberForYou <= 4) {
+    reason = `Strong player, but QB is intentionally de-prioritized this early in a one-QB league. RB/WR usually gives better value here.`;
+  } else if (hasSuperflex && position === "QB" && pickNumberForYou <= 5) {
+    reason = `Your league allows extra QB value (Superflex/2QB), so quarterbacks are correctly treated as early-round priorities.`;
+  } else if (need >= 90) {
+    reason = `You still need ${position} depth${position === "RB" || position === "WR" ? " at a priority fantasy position" : ""}.`;
+  } else if (projectionPercentile != null && projectionPercentile >= 85) {
+    reason = `Strong projected value even though ${position} is not your biggest roster need.`;
+  } else {
+    reason = `Useful ${position} depth, but you are not forced into this position right now.`;
+  }
 
   return {
     score,
@@ -50,12 +116,9 @@ export function draftScore(
       scarcity: Math.round(scarcity),
       availabilityPressure: Math.round(availabilityPressure),
       health: Math.round(health),
+      strategy,
     },
-    reason: need >= 90
-      ? `You still need ${position} depth${position === "RB" || position === "WR" ? " at a priority fantasy position" : ""}.`
-      : projectionPercentile != null && projectionPercentile >= 85
-        ? `Strong projected value even though ${position} is not your biggest roster need.`
-        : `Useful ${position} depth, but you are not forced into this position right now.`,
+    reason,
   };
 }
 

@@ -4,7 +4,7 @@ import { SLEEPER_BASE } from "@/lib/sleeper";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const response = await fetch(`${SLEEPER_BASE}/players/nfl`, {
+  const response = await fetch(`${SLEEPER_BASE}/players/nfl?active=true`, {
     cache: "no-store",
   });
 

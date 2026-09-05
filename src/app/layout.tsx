@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import SimpleCoach from "./SimpleCoach";
+import DraftAutoRefresh from "@/components/DraftAutoRefresh";
 
 export const metadata: Metadata = {
   title: "Fantasy Copilot",
@@ -12,6 +13,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     <html lang="en">
       <body>
         <SimpleCoach />
+        <DraftAutoRefresh />
         {children}
       </body>
     </html>
